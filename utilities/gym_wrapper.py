@@ -15,36 +15,34 @@ class GymWrapper(object):
         return self.env.n
 
     def get_shape_of_obs(self):
-        obs_shapes = []
-        for obs in self.obs_space:
-            if isinstance(obs, spaces.Box):
-                obs_shapes.append(obs.shape)
-        assert len(self.obs_space) == len(obs_shapes)
-        return obs_shapes
+        # obs_shapes = []
+        # for obs in self.obs_space:
+        #     if isinstance(obs, spaces.Box):
+        #         obs_shapes.append(obs.shape)
+        # assert len(self.obs_space) == len(obs_shapes)
+        return self.env.obs_size
 
     def get_output_shape_of_act(self):
-        act_shapes = []
-        for act in self.act_space:
-            if isinstance(act, spaces.Discrete):
-                act_shapes.append(act.n)
-            elif isinstance(act, spaces.MultiDiscrete):
-                act_shapes.append(act.high - act.low + 1)
-            elif isinstance(act, spaces.Boxes):
-                assert act.shape == 1
-                act_shapes.append(act.shape)
-        return act_shapes
+        # act_shapes = []
+        # for act in self.act_space:
+        #     if isinstance(act, spaces.Discrete):
+        #         act_shapes.append(act.n)
+        #     elif isinstance(act, spaces.MultiDiscrete):
+        #         act_shapes.append(act.high - act.low + 1)
+        #     elif isinstance(act, spaces.Box):
+        #         act_shapes.append(act.shape[0])
+        return self.env.n_action
 
     def get_dtype_of_obs(self):
         return [obs.dtype for obs in self.obs_space]
 
     def get_input_shape_of_act(self):
-        act_shapes = []
-        for act in self.act_space:
-            if isinstance(act, spaces.Discrete):
-                act_shapes.append(act.n)
-            elif isinstance(act, spaces.MultiDiscrete):
-                act_shapes.append(act.shape)
-            elif isinstance(act, spaces.Boxes):
-                assert act.shape == 1
-                act_shapes.append(act.shape)
-        return act_shapes
+        # act_shapes = []
+        # for act in self.act_space:
+        #     if isinstance(act, spaces.Discrete):
+        #         act_shapes.append(act.n)
+        #     elif isinstance(act, spaces.MultiDiscrete):
+        #         act_shapes.append(act.shape)
+        #     elif isinstance(act, spaces.Box):
+        #         act_shapes.append(act.shape)
+        return self.n_action

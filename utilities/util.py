@@ -3,8 +3,6 @@ import torch
 from torch.distributions.one_hot_categorical import OneHotCategorical
 from torch.distributions.normal import Normal
 
-
-
 class GumbelSoftmax(OneHotCategorical):
 
     def __init__(self, logits, probs=None, temperature=0.1):
@@ -76,8 +74,9 @@ def select_action(args, logits, status='train', exploration=True, info={}):
                 else:
                     return OneHotCategorical(logits=logits).sample()
         elif status is 'test':
-            p_a = torch.softmax(logits, dim=-1)
-            return  (p_a == torch.max(p_a, dim=-1, keepdim=True)[0]).float()
+            # p_a = torch.softmax(logits, dim=-1)
+            # return  (p_a == torch.max(p_a, dim=-1, keepdim=True)[0]).float()
+            return OneHotCategorical(logits=logits).sample()
 
 def translate_action(args, action, env):
     if not args.continuous:

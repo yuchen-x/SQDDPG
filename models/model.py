@@ -13,8 +13,8 @@ class Model(nn.Module):
         self.cuda_ = torch.cuda.is_available() and self.args.cuda
         self.n_ = self.args.agent_num
         self.hid_dim = self.args.hid_size
-        self.obs_dim = self.args.obs_size
-        self.act_dim = self.args.action_dim
+        # self.obs_dim = self.args.obs_size
+        # self.act_dim = self.args.action_dim
 
     def reload_params_to_target(self):
         self.target_net.action_dicts.load_state_dict( self.action_dicts.state_dict() )
@@ -122,8 +122,9 @@ class Model(nn.Module):
 
 
     def train_process(self, stat, trainer):
+        assert False
         info = {}
-        state = trainer.env.reset()
+        obs = trainer.env.reset()
         if self.args.reward_record_type is 'episode_mean_step':
             trainer.mean_reward = 0
             trainer.mean_success = 0
@@ -166,6 +167,7 @@ class Model(nn.Module):
 
 
     def unpack_data(self, batch):
+        assert False
         batch_size = len(batch.state)
         rewards = cuda_wrapper(torch.tensor(batch.reward, dtype=torch.float), self.cuda_)
         last_step = cuda_wrapper(torch.tensor(batch.last_step, dtype=torch.float).contiguous().view(-1, 1), self.cuda_)

@@ -4,9 +4,9 @@ import torch
 from torch import optim
 import torch.nn as nn
 from utilities.util import *
-from utilities.replay_buffer import *
-from utilities.inspector import *
-from arguments import *
+from utilities.replay_buffer import TransReplayBuffer, EpisodeReplayBuffer
+from utilities.inspector import inspector
+# from arguments import *
 from utilities.logger import Logger
 
 
@@ -20,8 +20,8 @@ class PGTrainer(object):
         self.online = online
         inspector(self.args)
         if self.args.target:
-            target_net = model(self.args).cuda() if self.cuda_ else model(self.args)
-            self.behaviour_net = model(self.args, target_net).cuda() if self.cuda_ else model(self.args, target_net)
+            target_net = model(self.args).cuda() if self.cuda_ else model(self.args, np.max(env.obs_size), np.max(env.n_action))
+            self.behaviour_net = model(self.args, targettarget_net).cuda() if self.cuda_ else model(self.args, np.max(env.obs_size), np.max(env.n_action), target_net=target_net)
         else:
             self.behaviour_net = model(self.args).cuda() if self.cuda_ else model(self.args)
         if self.args.replay:
@@ -36,7 +36,7 @@ class PGTrainer(object):
         self.value_optimizers = []
         for value_dict in self.behaviour_net.value_dicts:
             self.value_optimizers.append(optim.Adam(value_dict.parameters(), lr=args.value_lrate))
-        self.init_action = cuda_wrapper( torch.zeros(1, self.args.agent_num, self.args.action_dim), cuda=self.cuda_ )
+        self.init_action = cuda_wrapper( torch.zeros(1, self.args.agent_num, np.max(env.n_action)), cuda=self.cuda_ )
         self.steps = 0
         self.episodes = 0
         self.mean_reward = 0
@@ -138,4 +138,4 @@ class PGTrainer(object):
         value_loss = stat.get('value_loss', 0)
         entropy = stat.get('entropy', 0)
         print ('Episode: {:4d}, Mean Reward: {:2.4f}, Action Loss: {:2.4f}, Value Loss is: {:2.4f}, Entropy: {:2.4f}\n'\
-        .format(self.episodes, stat['mean_reward'], action_loss+self.entr*entropy, value_loss, entropy))
+        .format(self.episodes, stat['mean_reward']*25, action_loss+self.entr*entropy, value_loss, entropy))
