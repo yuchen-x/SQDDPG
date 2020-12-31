@@ -2,6 +2,9 @@ import numpy as np
 import torch
 from torch.distributions.one_hot_categorical import OneHotCategorical
 from torch.distributions.normal import Normal
+from collections import namedtuple
+
+Transition = namedtuple('Transition', ('state', 'obs', 'action', 'reward', 'next_state', 'next_obs', 'done', 'last_step', 'valid'))
 
 class GumbelSoftmax(OneHotCategorical):
 
@@ -37,9 +40,12 @@ class GumbelSoftmax(OneHotCategorical):
 def normal_entropy(mean, std):
     return Normal(mean, std).entropy().sum()
 
-def multinomial_entropy(logits):
+def multinomial_entropy(logits, valid):
     assert logits.size(-1) > 1
-    return GumbelSoftmax(logits=logits).entropy().sum()
+    entropies = GumbelSoftmax(logits=logits).entropy()
+    assert entropies.shape == valid.shape, "dim mismatch"
+    # return GumbelSoftmax(logits=logits).entropy().sum()
+    return (entropies * valid).sum() 
 
 def normal_log_density(x, mean, std):
     return Normal(mean, std).log_prob(x)

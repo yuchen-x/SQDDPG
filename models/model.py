@@ -13,6 +13,7 @@ class Model(nn.Module):
         self.cuda_ = torch.cuda.is_available() and self.args.cuda
         self.n_ = self.args.agent_num
         self.hid_dim = self.args.hid_size
+        self.state_critic = self.args.state_critic
         # self.obs_dim = self.args.obs_size
         # self.act_dim = self.args.action_dim
 
@@ -30,7 +31,7 @@ class Model(nn.Module):
 
     def transition_update(self, trainer, trans, stat):
         if self.args.replay:
-            trainer.replay_buffer.add_experience(trans)
+            # trainer.replay_buffer.add_experience(trans)
             replay_cond = trainer.steps>self.args.replay_warmup\
              and len(trainer.replay_buffer.buffer)>=self.args.batch_size\
              and trainer.steps%self.args.behaviour_update_freq==0

@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 from utilities.util import *
 from models.model import Model
@@ -9,17 +10,17 @@ from collections import namedtuple
 
 class SQDDPG(Model):
 
-    def __init__(self, args, obs_size, action_dim, target_net=None):
+    def __init__(self, args, env_info, target_net=None):
         super(SQDDPG, self).__init__(args)
-        self.obs_dim = obs_size
-        self.act_dim = action_dim
+        self.state_dim = env_info['state_shape']
+        self.obs_dim = env_info['obs_shape']
+        self.act_dim = env_info['n_actions']
         self.construct_model()
         self.apply(self.init_weights)
         if target_net != None:
             self.target_net = target_net
             self.reload_params_to_target()
         self.sample_size = self.args.sample_size
-        self.Transition = namedtuple('Transition', ('state', 'obs', 'action', 'reward', 'next_state', 'next_obs', 'done', 'last_step', 'valid'))
 
     def unpack_data(self, batch):
         batch_size = len(batch.obs)
@@ -50,7 +51,7 @@ class SQDDPG(Model):
         else:
             for i in range(self.n_):
                 action_dicts.append(nn.ModuleDict( {'layer_1': nn.Linear(self.obs_dim, self.hid_dim),\
-                                                    'layer_2': nn.Linear(self.hid_dim, self.hid_dim),\
+                                                    'layer_2': nn.LSTM(self.hid_dim, self.hid_dim, num_layers=1, batch_first=True),\
                                                     'action_head': nn.Linear(self.hid_dim, self.act_dim)
                                                     }
                                                   )
@@ -72,27 +73,41 @@ class SQDDPG(Model):
                                   )
         else:
             for i in range(self.n_):
-                value_dicts.append(nn.ModuleDict( {'layer_1': nn.Linear( (self.obs_dim+self.act_dim)*self.n_, self.hid_dim ),\
-                                                   'layer_2': nn.Linear(self.hid_dim, self.hid_dim),\
-                                                   'value_head': nn.Linear(self.hid_dim, 1)
-                                                  }
-                                                )
-                                  )
+                if self.state_critic:
+                    value_dicts.append(nn.ModuleDict( {'layer_1': nn.Linear( (self.state_dim+self.act_dim)*self.n_, self.hid_dim ),\
+                                                       'layer_2': nn.Linear(self.hid_dim, self.hid_dim),\
+                                                       'value_head': nn.Linear(self.hid_dim, 1)
+                                                      }
+                                                    )
+                                      )
+                else:
+                    value_dicts.append(nn.ModuleDict( {'layer_1': nn.Linear( (self.obs_dim+self.act_dim)*self.n_, self.hid_dim ),\
+                                                       'layer_2': nn.Linear(self.hid_dim, self.hid_dim),\
+                                                       'value_head': nn.Linear(self.hid_dim, 1)
+                                                      }
+                                                    )
+                                      )
+                     
         self.value_dicts = nn.ModuleList(value_dicts)
 
     def construct_model(self):
         self.construct_value_net()
         self.construct_policy_net()
 
-    def policy(self, obs, schedule=None, last_act=None, last_hid=None, info={}, stat={}):
+    def policy(self, obs, H=None, epi_len=None, schedule=None, last_act=None, last_hid=None, info={}, stat={}):
         actions = []
+        hiddens = []
         for i in range(self.n_):
-            h = torch.relu( self.action_dicts[i]['layer_1'](obs[:, i, :]) )
-            h = torch.relu( self.action_dicts[i]['layer_2'](h) )
-            a = self.action_dicts[i]['action_head'](h)
-            actions.append(a)
+            x = F.leaky_relu( self.action_dicts[i]['layer_1'](obs[:, i, :]) )
+            if obs.shape[0] == 1:
+                x, h = self.action_dicts[i]['layer_2'](x.unsqueeze(0), H[i])
+            else:
+                x, h = self.action_dicts[i]['layer_2'](x.reshape(self.args.batch_size, epi_len, -1))
+            a = self.action_dicts[i]['action_head'](x)
+            actions.append(a.reshape(-1, self.act_dim))
+            hiddens.append(h)
         actions = torch.stack(actions, dim=1)
-        return actions
+        return actions, hiddens
 
     def sample_grandcoalitions(self, batch_size):
         seq_set = cuda_wrapper(torch.tril(torch.ones(self.n_, self.n_), diagonal=0, out=None), self.cuda_)
@@ -112,37 +127,50 @@ class SQDDPG(Model):
         act_map = subcoalition_map.unsqueeze(-1).float() # shape = (b, n_s, n, n, 1)
         act = act * act_map
         act = act.contiguous().view(batch_size, self.sample_size, self.n_, -1) # shape = (b, n_s, n, n*a)
-        obs = obs.unsqueeze(1).unsqueeze(2).expand(batch_size, self.sample_size, self.n_, self.n_, self.obs_dim) # shape = (b, n, o) -> (b, 1, n, o) -> (b, 1, 1, n, o) -> (b, n_s, n, n, o)
-        obs = obs.contiguous().view(batch_size, self.sample_size, self.n_, self.n_*self.obs_dim) # shape = (b, n_s, n, n, o) -> (b, n_s, n, n*o)
+        if self.state_critic:
+            obs = obs.unsqueeze(1).unsqueeze(2).expand(batch_size, self.sample_size, self.n_, self.n_, self.state_dim) # shape = (b, n, o) -> (b, 1, n, o) -> (b, 1, 1, n, o) -> (b, n_s, n, n, o)
+            obs = obs.contiguous().view(batch_size, self.sample_size, self.n_, self.n_*self.state_dim) # shape = (b, n_s, n, n, o) -> (b, n_s, n, n*o)
+        else:
+            obs = obs.unsqueeze(1).unsqueeze(2).expand(batch_size, self.sample_size, self.n_, self.n_, self.obs_dim) # shape = (b, n, o) -> (b, 1, n, o) -> (b, 1, 1, n, o) -> (b, n_s, n, n, o)
+            obs = obs.contiguous().view(batch_size, self.sample_size, self.n_, self.n_*self.obs_dim) # shape = (b, n_s, n, n, o) -> (b, n_s, n, n*o)
         inp = torch.cat((obs, act), dim=-1)
         values = []
         for i in range(self.n_):
-            h = torch.relu( self.value_dicts[i]['layer_1'](inp[:, :, i, :]) )
-            h = torch.relu( self.value_dicts[i]['layer_2'](h) )
+            h = F.leaky_relu( self.value_dicts[i]['layer_1'](inp[:, :, i, :]) )
+            h = F.leaky_relu( self.value_dicts[i]['layer_2'](h) )
             v = self.value_dicts[i]['value_head'](h)
             values.append(v)
         values = torch.stack(values, dim=2)
         return values
 
-    def get_loss(self, batch):
+    def get_loss(self, batch, epi_len):
         batch_size = len(batch.obs)
         n = self.args.agent_num
         action_dim = self.act_dim
         valids, rewards, last_step, done, actions, state, obs, next_state, next_obs = self.unpack_data(batch)
         # do the argmax action on the action loss
-        action_out = self.policy(obs)
+        action_out, _ = self.policy(obs, epi_len=epi_len)
         actions_ = select_action(self.args, action_out, status='train', exploration=False)
-        shapley_values = self.marginal_contribution(obs, actions_).mean(dim=1).contiguous().view(-1, n)
-        # do the exploration action on the value loss
-        shapley_values_sum = self.marginal_contribution(obs, actions).mean(dim=1).contiguous().view(-1, n).sum(dim=-1, keepdim=True).expand(batch_size, self.n_)
+        if self.state_critic:
+            shapley_values = self.marginal_contribution(state, actions_).mean(dim=1).contiguous().view(-1, n)
+            # do the exploration action on the value loss
+            shapley_values_sum = self.marginal_contribution(state, actions).mean(dim=1).contiguous().view(-1, n).sum(dim=-1, keepdim=True).expand(batch_size, self.n_)
+        else:
+            shapley_values = self.marginal_contribution(obs, actions_).mean(dim=1).contiguous().view(-1, n)
+            # do the exploration action on the value loss
+            shapley_values_sum = self.marginal_contribution(obs, actions).mean(dim=1).contiguous().view(-1, n).sum(dim=-1, keepdim=True).expand(batch_size, self.n_)
+
         # do the argmax action on the next value loss
         if self.args.target:
-            next_action_out = self.target_net.policy(next_obs)
+            next_action_out, _ = self.target_net.policy(next_obs, epi_len=epi_len)
         else:
             next_action_out = self.policy(next_obs)
         next_actions_ = select_action(self.args, next_action_out, status='train', exploration=False)
         if self.args.target:
-            next_shapley_values_sum = self.target_net.marginal_contribution(next_obs, next_actions_.detach()).mean(dim=1).contiguous().view(-1, n).sum(dim=-1, keepdim=True).expand(batch_size, self.n_)
+            if self.state_critic:
+                next_shapley_values_sum = self.target_net.marginal_contribution(next_state, next_actions_.detach()).mean(dim=1).contiguous().view(-1, n).sum(dim=-1, keepdim=True).expand(batch_size, self.n_)
+            else:
+                next_shapley_values_sum = self.target_net.marginal_contribution(next_obs, next_actions_.detach()).mean(dim=1).contiguous().view(-1, n).sum(dim=-1, keepdim=True).expand(batch_size, self.n_)
         else:
             next_shapley_values_sum = self.marginal_contribution(next_obs, next_actions_.detach()).mean(dim=1).contiguous().view(-1, n).sum(dim=-1, keepdim=True).expand(batch_size, self.n_)
         returns = cuda_wrapper(torch.zeros((batch_size, n), dtype=torch.float), self.cuda_)
@@ -158,39 +186,44 @@ class SQDDPG(Model):
         advantages = shapley_values
         if self.args.normalize_advantages:
             advantages = batchnorm(advantages)
-        action_loss = -advantages
-        action_loss = action_loss.mean(dim=0)
-        value_loss = deltas.pow(2).mean(dim=0)
-        return action_loss, value_loss, action_out
+        assert valids.shape == advantages.shape, "dim mismatch"
+        action_loss = valids * (-advantages)
+        action_loss = action_loss.sum(dim=0) / valids.sum(dim=0)
+        assert valids.shape == deltas.shape, "dim mismatch"
+        value_loss = (valids * deltas.pow(2)).sum(dim=0) / valids.sum(dim=0)
+        return action_loss, value_loss, action_out, valids
 
     def train_process(self, stat, trainer):
         info = {}
         obs = trainer.env.reset()
         state = [trainer.env.get_state()] * self.args.agent_num
+        H = [None] * self.args.agent_num
         if self.args.reward_record_type is 'episode_mean_step':
             trainer.mean_reward = 0
             trainer.mean_success = 0
+        episode = []
         for t in range(self.args.max_steps):
             obs_ = cuda_wrapper(prep_obs(obs).contiguous().view(1, self.n_, self.obs_dim), self.cuda_)
             start_step = True if t == 0 else False
             obs_ = cuda_wrapper(prep_obs(obs).contiguous().view(1, self.n_, self.obs_dim), self.cuda_)
-            action_out = self.policy(obs_, info=info, stat=stat)
+            action_out, H = self.policy(obs_, H=H,  info=info, stat=stat)
             action = select_action(self.args, action_out, status='train', info=info)
             _, actual = translate_action(self.args, action, trainer.env)
             actual = [np.argmax(a) for a in actual]
             _, next_obs, reward, done, valid, debug = trainer.env.step(actual)
             next_state = [trainer.env.get_state()] * self.args.agent_num
             if isinstance(done, list): done = np.sum(done)
-            trans = self.Transition(state,
-                                    obs,
-                                    action.cpu().numpy(),
-                                    np.array(reward),
-                                    next_state,
-                                    next_obs,
-                                    done,
-                                    done,
-                                    np.array(valid)
-                                    )
+            trans = Transition(state,
+                               obs,
+                               action.cpu().numpy(),
+                               np.array(reward),
+                               next_state,
+                               next_obs,
+                               done,
+                               done,
+                               np.array(valid)
+                               )
+            episode.append(trans)
             self.transition_update(trainer, trans, stat)
             success = debug['success'] if 'success' in debug else 0.0
             trainer.steps += 1
@@ -206,5 +239,29 @@ class SQDDPG(Model):
             stat['mean_success'] = trainer.mean_success
             obs = next_obs
             state = next_state
+            if done:
+                break
+        trainer.replay_buffer.add_episode(episode)
         stat['turn'] = t+1
         trainer.episodes += 1
+
+    def test_process(self, trainer, num_epi):
+        R = 0.0
+        for _ in range(num_epi):
+            obs = trainer.env.reset()
+            H = [None] * self.args.agent_num
+            for t in range(self.args.max_steps):
+                obs_ = cuda_wrapper(prep_obs(obs).contiguous().view(1, self.n_, self.obs_dim), self.cuda_)
+                start_step = True if t == 0 else False
+                obs_ = cuda_wrapper(prep_obs(obs).contiguous().view(1, self.n_, self.obs_dim), self.cuda_)
+                action_out, H = self.policy(obs_, H=H)
+                action = select_action(self.args, action_out, status='test')
+                _, actual = translate_action(self.args, action, trainer.env)
+                actual = [np.argmax(a) for a in actual]
+                _, next_obs, reward, done, valid, debug = trainer.env.step(actual)
+                if isinstance(done, list): done = np.sum(done)
+                obs = next_obs
+                R += self.args.gamma**t*np.sum(reward)
+                if done:
+                    break
+        return R / num_epi
